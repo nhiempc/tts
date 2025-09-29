@@ -1,0 +1,13 @@
+/build
+/package-lock.json
+/node_modules
+/yarn.lock
+/.history
+/.prettierrc
+.idea/inspectionProfiles/Project_Default.xml
+.idea/asset-client.iml
+.idea/modules.xml
+.idea/vcs.xml
+.idea/codeStyles/codeStyleConfig.xml
+.idea/codeStyles/Project.xml
+.idea/.gitignore

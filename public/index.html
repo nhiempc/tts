@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Batch TTS (UI → Node proxy → gowithnd)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .chip {
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      display: inline-block;
+    }
+
+    .chip-wait {
+      background: #f3f4f6;
+    }
+
+    .chip-run {
+      background: #fef3c7;
+    }
+
+    .chip-ok {
+      background: #dcfce7;
+    }
+
+    .chip-err {
+      background: #fee2e2;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    #cookie {
+      height: 150px;
+    }
+    #downloadAll{
+      margin-top: 15px;
+    }
+    #downloadAll:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      background-color: gray;
+    }
+  </style>
+</head>
+
+<body class="bg-white min-h-screen">
+  <div class="max-w-6xl mx-auto p-4 space-y-4">
+    <h1 class="text-2xl font-semibold">Batch TTS Proxy UI</h1>
+    <p class="text-sm text-gray-600">UI trong trình duyệt → POST tới Node proxy của bạn → Node gọi API gowithnd (giống
+      hệt Postman) kèm Cookie + CSRF.</p>
+
+    <!-- Cookie + Token -->
+    <div class="space-y-2">
+      <label class="text-sm font-medium">Cookie string (giống Postman / curl)</label>
+      <textarea id="cookie" class="w-full border rounded p-2 h-20 mono"
+        placeholder="XSRF-TOKEN=...; go_with_nd_session=..."></textarea>
+      <p class="text-xs text-gray-500">Dán nguyên chuỗi cookie (copy từ Postman hoặc DevTools → Application → Cookies).
+      </p>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="space-y-2">
+        <label class="text-sm font-medium">CSRF token (_token / x-csrf-token)</label>
+        <input id="token" class="w-full border rounded p-2 mono" placeholder="Hm2MM6f..."
+          value="Hm2MM6fWVFAKU0bh6Otmbp4PWHB0AcMcV6Fq53xW" />
+      </div>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Tên bắt đầu (name)</label>
+        <input id="nameStart" type="number" class="w-full border rounded p-2" value="1" />
+      </div>
+    </div>
+
+    <!-- Voice config -->
+    <div class="grid md:grid-cols-5 gap-4">
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Voice language</label>
+        <input id="lang" class="w-full border rounded p-2" value="en-us" />
+      </div>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Voice gender</label>
+        <input id="gender" class="w-full border rounded p-2" value="male" />
+      </div>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Voices</label>
+        <input id="voices" class="w-full border rounded p-2" value="am_puck" />
+      </div>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Audio format</label>
+        <input id="format" class="w-full border rounded p-2" value="mp3" />
+      </div>
+      <div class="space-y-2">
+        <label class="text-sm font-medium">Speed</label>
+        <input id="speed" class="w-full border rounded p-2" type="number" step="0.1" min="0.5" max="2" value="1.0" />
+      </div>
+    </div>
+
+    <!-- Upload .txt -->
+    <div class="space-y-2">
+      <label class="text-sm font-medium">Tải file .txt (mỗi đoạn cách nhau <b>1 dòng trống</b>)</label>
+      <input id="file" type="file" accept=".txt" />
+      <p id="parsedInfo" class="text-xs text-gray-600"></p>
+    </div>
+
+    <!-- Controls -->
+    <div class="flex items-center gap-2">
+      <button id="start" class="px-4 py-2 rounded-2xl bg-black text-white">Bắt đầu</button>
+      <button id="pause" class="px-4 py-2 rounded-2xl bg-gray-200" disabled>Tạm dừng</button>
+      <button id="reset" class="px-4 py-2 rounded-2xl bg-gray-100">Làm lại</button>
+      <span id="status" class="text-sm text-gray-600 ml-2">Chờ</span>
+    </div>
+
+    <!-- Progress -->
+    <div>
+      <div class="flex justify-between text-sm mb-1">
+        <span>Tiến trình</span>
+        <span id="progressText">0/0 (0%)</span>
+      </div>
+      <div class="w-full h-3 bg-gray-100 rounded overflow-hidden">
+        <div id="progressBar" class="h-full bg-black" style="width:0%"></div>
+      </div>
+      <p id="errSum" class="text-xs text-red-600 mt-1 hidden"></p>
+      <button id="downloadAll" class="px-4 py-2 rounded-2xl bg-green-700 text-white" disabled>
+        Tải TẤT CẢ (ZIP)
+      </button>
+    </div>
+
+    <!-- Table -->
+    <!-- <div class="mt-4 border rounded-2xl overflow-hidden">
+      <table class="w-full text-sm" id="jobsTable">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="text-left p-2">#</th>
+            <th class="text-left p-2">Trạng thái</th>
+            <th class="text-left p-2">Kết quả</th>
+            <th class="text-left p-2">Hành động</th>
+          </tr>
+        </thead>
+        <tbody id="jobsBody"></tbody>
+      </table>
+    </div> -->
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    let chunks = [];
+    let jobs = [];       // { idx, content, status, response?, error? }
+    let running = false;
+    let paused = false;
+
+    $("file").addEventListener("change", (e) => {
+      const f = e.target.files?.[0]; if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || "");
+        parseTxt(text);
+      };
+      reader.readAsText(f, "utf-8");
+    });
+
+    function parseTxt(text) {
+      const norm = text.replace(/\r\n?/g, "\n");
+      chunks = norm.split(/\n\s*\n+/g).map(s => s.trim()).filter(Boolean);
+      jobs = chunks.map((content, i) => ({ idx: i + 1, content, status: "pending" }));
+      $("parsedInfo").textContent = `Đã đọc ${chunks.length} đoạn.`;
+      // renderTable();
+      updateProgress();
+    }
+
+    $("start").addEventListener("click", () => runAll());
+    $("pause").addEventListener("click", () => { paused = true; running = false; $("pause").disabled = true; setStatus("Tạm dừng"); });
+    $("reset").addEventListener("click", resetAll);
+
+    function setStatus(t) { $("status").textContent = t; }
+
+    function updateProgress() {
+      const total = jobs.length;
+      const done = jobs.filter(j => j.status === "done").length;
+      const pct = total ? Math.round(done / total * 100) : 0;
+      $("progressText").textContent = `${done}/${total} (${pct}%)`;
+      $("progressBar").style.width = pct + "%";
+      const failed = jobs.filter(j => j.status === "error").length;
+      if (failed > 0) {
+        $("errSum").classList.remove("hidden");
+        $("errSum").textContent = `Thất bại: ${failed}`;
+      } else {
+        $("errSum").classList.add("hidden");
+      }
+      // ⬇️ Bật/tắt nút ZIP
+      $("downloadAll").disabled = done === 0;
+    }
+
+    function statusChip(st) {
+      if (st === "pending") return `<span class="chip chip-wait">Chờ</span>`;
+      if (st === "running") return `<span class="chip chip-run">Đang chạy…</span>`;
+      if (st === "done") return `<span class="chip chip-ok">Xong</span>`;
+      if (st === "error") return `<span class="chip chip-err">Lỗi</span>`;
+      return st;
+    }
+
+    function renderResult(resp) {
+      const url = resp.audioUrl;
+      return `
+        <div class="space-y-1">
+          <a class="underline break-all" href="${url}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a><br/>
+          <audio controls src="${url}"></audio>
+        </div>
+      `;
+    }
+
+    function renderTable() {
+      const tb = $("jobsBody");
+      tb.innerHTML = "";
+
+      jobs.forEach((j, idx) => {
+        const tr = document.createElement("tr");
+        tr.className = "border-t align-top";
+
+        // Action buttons
+        const actions = [];
+        if (j.status === "error") {
+          actions.push(`<button class="px-3 py-1 rounded-full bg-black text-white" data-retry="${idx}">Thử lại</button>`);
+        }
+        if (j.status === "done" && j.response?.audioUrl) {
+          actions.push(
+            `<button class="px-3 py-1 rounded-full bg-green-600 text-white"
+             type="button"
+             data-dl="${idx}">
+              Tải xuống
+            </button>`
+          );
+        }
+
+        tr.innerHTML = `
+          <td class="p-2">${j.idx}</td>
+          <td class="p-2">
+            ${statusChip(j.status)}
+            ${j.error ? `<div class="text-xs text-red-600 mt-1 break-words mono">${escapeHtml(j.error)}</div>` : ""}
+          </td>
+          <td class="p-2">
+            ${j.response ? renderResult(j.response) : `<span class="text-gray-400">—</span>`}
+          </td>
+          <td class="p-2">
+            <div class="flex gap-2 items-center">
+              ${actions.join("") || `<span class="text-gray-400">—</span>`}
+            </div>
+          </td>
+        `;
+        tb.appendChild(tr);
+        // Bind retry
+        tb.querySelectorAll("[data-retry]").forEach(btn => {
+          btn.addEventListener("click", async (e) => {
+            const i = parseInt(e.currentTarget.getAttribute("data-retry"), 10);
+            await runOne(i);
+          });
+        });
+
+        // Bind download (KHÔNG điều hướng)
+        tb.querySelectorAll("[data-dl]").forEach(btn => {
+          btn.addEventListener("click", (e) => {
+            const i = parseInt(e.currentTarget.getAttribute("data-dl"), 10);
+            downloadViaProxy(i);
+          });
+        });
+      });
+
+      // Bind retry buttons
+      tb.querySelectorAll("[data-retry]").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          const i = parseInt(e.currentTarget.getAttribute("data-retry"), 10);
+          await runOne(i);
+        });
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[m]));
+    }
+
+    async function runAll() {
+      if (running) return;
+      if (!jobs.length) { alert("Chưa có nội dung."); return; }
+
+      const cookie = $("cookie").value.trim();
+      const token = $("token").value.trim();
+      if (!cookie || !token) { alert("Thiếu Cookie string hoặc CSRF token."); return; }
+
+      paused = false;
+      running = true;
+      $("pause").disabled = false;
+      setStatus("Đang tạo…");
+
+      for (let i = 0; i < jobs.length; i++) {
+        if (!running || paused) break;
+        if (jobs[i].status === "done") continue;
+        await runOne(i);
+      }
+
+      running = false;
+      $("pause").disabled = true;
+      if (!paused) setStatus("Hoàn tất");
+    }
+
+    async function runOne(i) {
+      const cookie = $("cookie").value.trim();
+      const token = $("token").value.trim();
+      const nameStart = parseInt($("nameStart").value || "1", 10);
+      const lang = $("lang").value || "en-us";
+      const gender = $("gender").value || "male";
+      const voices = $("voices").value || "am_puck";
+      const format = $("format").value || "mp3";
+      const speed = $("speed").value || "1.0";
+
+      jobs[i].status = "running";
+      jobs[i].error = undefined;
+      // renderTable();
+      updateProgress();
+
+      try {
+        const name = nameStart + i;
+        const form = new URLSearchParams({
+          _token: token,
+          name: String(name),
+          content: jobs[i].content,
+          voice_language: lang,
+          voice_gender: gender,
+          voices,
+          audio_format: format,
+          speed: String(speed)
+        });
+
+        const resp = await fetch("/api/tts", {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "x-forward-cookie": cookie
+          },
+          body: form
+        });
+
+        const text = await resp.text();
+        let json;
+        try { json = JSON.parse(text); } catch { json = null; }
+
+        if (!resp.ok || !json || json.success !== true || !Array.isArray(json.data)) {
+          throw new Error(`HTTP ${resp.status}. Phản hồi: ${text.slice(0, 300)}`);
+        }
+
+        const data = json.data; // [userName, systemPath, format, voice, duration]
+        const userFileName = data[0];
+        const systemFilePath = data[1];
+        const outFormat = data[2];
+        const outVoice = data[3];
+        const durationSec = data[4];
+
+        const audioUrl = "https://gowithnd.com/" + systemFilePath;
+
+        jobs[i].status = "done";
+        jobs[i].response = {
+          userFileName,
+          systemFilePath,
+          format: outFormat,
+          voice: outVoice,
+          durationSec,
+          audioUrl
+        };
+
+        console.log("Job", i + 1, "done:", jobs[i].response);
+      } catch (e) {
+        jobs[i].status = "error";
+        jobs[i].error = e?.message || String(e);
+        console.error("Job", i + 1, "error:", jobs[i].error);
+      }
+
+      // renderTable();
+      updateProgress();
+    }
+
+    function resetAll() {
+      chunks = [];
+      jobs = [];
+      running = false;
+      paused = false;
+      $("pause").disabled = true;
+      $("parsedInfo").textContent = "";
+      $("jobsBody").innerHTML = "";
+      $("progressText").textContent = "0/0 (0%)";
+      $("progressBar").style.width = "0%";
+      setStatus("Chờ");
+      $("errSum").classList.add("hidden");
+    }
+    async function downloadViaProxy(idx) {
+      const j = jobs[idx];
+      if (!j?.response?.systemFilePath) return;
+
+      const cookieStr = document.getElementById("cookie").value.trim(); // bạn dán cookie ở UI
+      const dlUrl = `/api/download?path=${encodeURIComponent(j.response.systemFilePath)}&name=${encodeURIComponent(j.idx + ".mp3")}`;
+
+      try {
+        const r = await fetch(dlUrl, {
+          method: "GET",
+          headers: {
+            "x-forward-cookie": cookieStr   // BẮT BUỘC: gửi cookie cho proxy
+          }
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          throw new Error(`HTTP ${r.status} — ${t}`);
+        }
+        const blob = await r.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = `${j.idx}.mp3`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+      } catch (e) {
+        alert("Tải xuống thất bại: " + (e?.message || e));
+      }
+    }
+
+    async function downloadAllZip() {
+      // Lấy các mục đã hoàn thành
+      const finished = jobs.filter(j => j.status === "done" && j.response?.systemFilePath);
+      if (!finished.length) {
+        alert("Chưa có file hoàn thành để tải.");
+        return;
+      }
+
+      const cookieStr = document.getElementById("cookie").value.trim();
+      if (!cookieStr) {
+        alert("Thiếu Cookie string.");
+        return;
+      }
+
+      // Chuẩn bị payload cho server: path + file name mong muốn
+      const items = finished.map(j => ({
+        path: j.response.systemFilePath,     // ví dụ: "audio/2-xxx.mp3"
+        name: `${j.idx}.mp3`                 // tên file trong ZIP theo số thứ tự
+      }));
+
+      try {
+        const r = await fetch("/api/download-zip", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-forward-cookie": cookieStr
+          },
+          body: JSON.stringify({ items })
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          throw new Error(`HTTP ${r.status} — ${t}`);
+        }
+
+        // Nhận về ZIP dạng blob và lưu
+        const blob = await r.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+        a.download = `tts_batch_${stamp}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+      } catch (e) {
+        alert("Tải ZIP thất bại: " + (e?.message || e));
+      }
+    }
+
+    // Gắn event cho nút ZIP (đặt sau khi đã tạo DOM)
+    document.getElementById("downloadAll").addEventListener("click", downloadAllZip);
+
+  </script>
+</body>
+
+</html>
